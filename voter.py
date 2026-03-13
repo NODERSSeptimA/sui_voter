@@ -3,7 +3,7 @@ import logging
 import os
 import signal
 import sys
-import time
+import threading
 
 from config import load_config, ConfigError
 from sui_client import (
@@ -18,13 +18,12 @@ from notifier import send_telegram
 
 logger = logging.getLogger("sui_voter")
 
-_shutdown = False
+_stop_event = threading.Event()
 
 
 def _handle_signal(signum, frame):
-    global _shutdown
-    logger.info("Received signal %s, shutting down after current cycle...", signum)
-    _shutdown = True
+    logger.info("Received signal %s, shutting down...", signum)
+    _stop_event.set()
 
 
 def read_voted_epoch(path: str):
@@ -131,7 +130,7 @@ def main():
                 config["min_quorum"],
                 config["strategy"])
 
-    while not _shutdown:
+    while not _stop_event.is_set():
         try:
             result = do_vote_cycle(config, current_epoch, voted_epoch)
             rpc_fail_count = 0
@@ -162,7 +161,7 @@ def main():
         except Exception:
             logger.exception("Unexpected error")
 
-        time.sleep(config["poll_interval"])
+        _stop_event.wait(config["poll_interval"])
 
     logger.info("Shutdown complete")
 
