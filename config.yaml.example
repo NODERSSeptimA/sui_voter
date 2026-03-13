@@ -1,0 +1,25 @@
+# SUI RPC endpoint (local validator node)
+rpc_url: "http://127.0.0.1:9000"
+
+# Trusted validator addresses to follow
+trusted_validators:
+  - "0xVALIDATOR_ADDRESS_1"
+  - "0xVALIDATOR_ADDRESS_2"
+  - "0xVALIDATOR_ADDRESS_3"
+
+# Minimum trusted validators that must be in active set to vote
+min_quorum: 2
+
+# Polling interval in seconds
+poll_interval: 60
+
+# Gas price calculation: "median" or "average"
+strategy: "median"
+
+# Telegram notifications
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"
+  chat_id: "YOUR_CHAT_ID"
+
+# Path to SUI CLI binary
+sui_bin: "sui"
