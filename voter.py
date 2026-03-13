@@ -85,14 +85,22 @@ def do_vote_cycle(config: dict, current_epoch, voted_epoch) -> dict:
         return result
 
     gas_price = compute_gas_price(votes, config["strategy"])
-    submit_vote(config["sui_bin"], gas_price)
+    tx_info = submit_vote(config["sui_bin"], gas_price)
 
     result["voted"] = True
     result["gas_price"] = gas_price
+
+    digest = tx_info.get("digest") or "unknown"
+    status = tx_info.get("status") or "unknown"
+    explorer_url = f"https://suiscan.xyz/mainnet/tx/{digest}"
+
     result["vote_msg"] = (
-        f"Epoch {new_epoch}: voted gas price {gas_price} "
+        f"Epoch: {new_epoch}\n"
+        f"Gas price: {gas_price} MIST "
         f"({config['strategy']} of {len(votes)}/{len(config['trusted_validators'])} "
-        f"trusted validators)"
+        f"trusted validators)\n"
+        f"Tx: {digest} — Status: {status}\n"
+        f"{explorer_url}"
     )
     logger.info(result["vote_msg"])
     return result

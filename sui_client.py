@@ -1,4 +1,6 @@
+import json
 import logging
+import re
 import subprocess
 
 import requests
@@ -60,7 +62,23 @@ def get_system_state(rpc_url: str) -> dict:
     return data["result"]
 
 
-def submit_vote(sui_bin: str, gas_price: int):
+def _parse_tx_output(stdout: str) -> dict:
+    """Parse transaction digest and status from sui CLI output."""
+    info = {"digest": None, "status": None}
+
+    digest_match = re.search(r"Transaction Digest\s*-+\s*\n(\S+)", stdout)
+    if digest_match:
+        info["digest"] = digest_match.group(1)
+
+    status_match = re.search(r'"status":\s*"(\w+)"', stdout)
+    if status_match:
+        info["status"] = status_match.group(1)
+
+    return info
+
+
+def submit_vote(sui_bin: str, gas_price: int) -> dict:
+    """Submit gas price vote. Returns dict with 'digest' and 'status'."""
     cmd = [sui_bin, "validator", "update-gas-price", str(gas_price)]
     try:
         result = subprocess.run(
@@ -78,4 +96,7 @@ def submit_vote(sui_bin: str, gas_price: int):
         output = result.stderr.strip() or result.stdout.strip()
         raise CLIError(f"CLI failed (rc={result.returncode}): {output}")
 
-    logger.info("Vote submitted: gas_price=%d, output=%s", gas_price, result.stdout.strip())
+    tx_info = _parse_tx_output(result.stdout)
+    logger.info("Vote submitted: gas_price=%d, digest=%s, status=%s",
+                gas_price, tx_info["digest"], tx_info["status"])
+    return tx_info

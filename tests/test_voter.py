@@ -51,12 +51,15 @@ class TestDoVoteCycle(unittest.TestCase):
                 {"suiAddress": "0xccc", "nextEpochGasPrice": "300"},
             ],
         }
+        mock_submit.return_value = {"digest": "ABC123", "status": "Success"}
 
         result = do_vote_cycle(self._make_config(), current_epoch=9, voted_epoch=None)
 
         self.assertEqual(result["new_epoch"], 10)
         self.assertTrue(result["voted"])
         self.assertEqual(result["gas_price"], 200)
+        self.assertIn("ABC123", result["vote_msg"])
+        self.assertIn("suiscan.xyz", result["vote_msg"])
         mock_submit.assert_called_once_with("sui", 200)
 
     @patch("voter.submit_vote")
@@ -83,6 +86,7 @@ class TestDoVoteCycle(unittest.TestCase):
                 {"suiAddress": "0xbbb", "nextEpochGasPrice": "200"},
             ],
         }
+        mock_submit.return_value = {"digest": "XYZ", "status": "Success"}
 
         result = do_vote_cycle(self._make_config(), current_epoch=None, voted_epoch=None)
 

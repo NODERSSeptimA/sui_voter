@@ -8,6 +8,7 @@ from sui_client import (
     extract_trusted_votes,
     get_system_state,
     submit_vote,
+    _parse_tx_output,
     RPCError,
     CLIError,
 )
@@ -106,11 +107,35 @@ class TestGetSystemState(unittest.TestCase):
             get_system_state("http://localhost:9000")
 
 
+class TestParseTxOutput(unittest.TestCase):
+    def test_parses_digest_and_status(self):
+        stdout = (
+            "----- Transaction Digest ----\n"
+            "9GQTKwy2iEVbmuje12pfHqErydLDRxJUvyLXL7hULmjK\n"
+            "\n"
+            '----- Transaction Effects ----\n'
+            '{\n'
+            '  "V2": {\n'
+            '    "status": "Success"\n'
+            '  }\n'
+            '}'
+        )
+        info = _parse_tx_output(stdout)
+        self.assertEqual(info["digest"], "9GQTKwy2iEVbmuje12pfHqErydLDRxJUvyLXL7hULmjK")
+        self.assertEqual(info["status"], "Success")
+
+    def test_no_match(self):
+        info = _parse_tx_output("some random output")
+        self.assertIsNone(info["digest"])
+        self.assertIsNone(info["status"])
+
+
 class TestSubmitVote(unittest.TestCase):
     @patch("sui_client.subprocess.run")
     def test_success(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
-        submit_vote("sui", 750)
+        mock_run.return_value = MagicMock(returncode=0, stdout="----- Transaction Digest ----\nABC123\n", stderr="")
+        result = submit_vote("sui", 750)
+        self.assertEqual(result["digest"], "ABC123")
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
         self.assertIn("750", args)
