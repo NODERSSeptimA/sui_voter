@@ -69,6 +69,8 @@ def submit_vote(sui_bin: str, gas_price: int):
             text=True,
             timeout=CLI_TIMEOUT,
         )
+    except FileNotFoundError:
+        raise CLIError(f"sui binary not found: {sui_bin}")
     except subprocess.TimeoutExpired:
         raise CLIError(f"CLI timed out after {CLI_TIMEOUT}s")
 
