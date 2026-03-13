@@ -61,7 +61,7 @@ def get_system_state(rpc_url: str) -> dict:
 
 
 def submit_vote(sui_bin: str, gas_price: int):
-    cmd = [sui_bin, "validator", "update-gas-price", "--gas-price", str(gas_price)]
+    cmd = [sui_bin, "validator", "update-gas-price", str(gas_price)]
     try:
         result = subprocess.run(
             cmd,

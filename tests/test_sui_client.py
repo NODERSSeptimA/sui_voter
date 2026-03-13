@@ -113,7 +113,6 @@ class TestSubmitVote(unittest.TestCase):
         submit_vote("sui", 750)
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
-        self.assertIn("--gas-price", args)
         self.assertIn("750", args)
 
     @patch("sui_client.subprocess.run")
