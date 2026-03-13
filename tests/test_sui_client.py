@@ -3,7 +3,14 @@ import requests
 import subprocess
 from unittest.mock import patch, MagicMock
 
-from sui_client import compute_gas_price, extract_trusted_votes
+from sui_client import (
+    compute_gas_price,
+    extract_trusted_votes,
+    get_system_state,
+    submit_vote,
+    RPCError,
+    CLIError,
+)
 
 
 class TestComputeGasPrice(unittest.TestCase):
@@ -62,6 +69,64 @@ class TestExtractTrustedVotes(unittest.TestCase):
     def test_empty_validators(self):
         votes = extract_trusted_votes([], ["0xaaa"])
         self.assertEqual(votes, [])
+
+
+class TestGetSystemState(unittest.TestCase):
+    @patch("sui_client.requests.post")
+    def test_success(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "result": {
+                "epoch": "42",
+                "activeValidators": [{"suiAddress": "0xabc"}],
+            }
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        state = get_system_state("http://localhost:9000")
+        self.assertEqual(state["epoch"], "42")
+        self.assertEqual(len(state["activeValidators"]), 1)
+
+    @patch("sui_client.requests.post")
+    def test_rpc_connection_error(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError("refused")
+        with self.assertRaises(RPCError):
+            get_system_state("http://localhost:9000")
+
+    @patch("sui_client.requests.post")
+    def test_rpc_json_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "error": {"code": -32000, "message": "internal error"}
+        }
+        mock_post.return_value = mock_resp
+        with self.assertRaises(RPCError):
+            get_system_state("http://localhost:9000")
+
+
+class TestSubmitVote(unittest.TestCase):
+    @patch("sui_client.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        submit_vote("sui", 750)
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        self.assertIn("--gas-price", args)
+        self.assertIn("750", args)
+
+    @patch("sui_client.subprocess.run")
+    def test_cli_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error msg")
+        with self.assertRaises(CLIError):
+            submit_vote("sui", 750)
+
+    @patch("sui_client.subprocess.run")
+    def test_cli_timeout(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sui", timeout=60)
+        with self.assertRaises(CLIError):
+            submit_vote("sui", 750)
 
 
 if __name__ == "__main__":
