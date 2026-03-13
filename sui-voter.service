@@ -1,0 +1,14 @@
+[Unit]
+Description=SUI Gas Price Auto-Voter
+After=network.target
+
+[Service]
+Type=simple
+User=sui
+WorkingDirectory=/opt/sui-voter
+ExecStart=/usr/bin/python3 voter.py --config config.yaml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
