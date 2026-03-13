@@ -75,6 +75,7 @@ def submit_vote(sui_bin: str, gas_price: int):
         raise CLIError(f"CLI timed out after {CLI_TIMEOUT}s")
 
     if result.returncode != 0:
-        raise CLIError(f"CLI failed (rc={result.returncode}): {result.stderr.strip()}")
+        output = result.stderr.strip() or result.stdout.strip()
+        raise CLIError(f"CLI failed (rc={result.returncode}): {output}")
 
     logger.info("Vote submitted: gas_price=%d, output=%s", gas_price, result.stdout.strip())
