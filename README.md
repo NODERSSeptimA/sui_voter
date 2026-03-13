@@ -6,33 +6,33 @@ Daemon that automatically votes on SUI gas price for your validator by following
 
 ```
                           ┌─────────────────────┐
-                          │   Polling Loop       │
-                          │   (every 60s)        │
+                          │   Polling Loop      │
+                          │   (every 60s)       │
+                          └──────────┬──────────┘
+                                     │
+                          ┌──────────▼───────────┐
+                          │  suix_getLatest      │
+                          │  SuiSystemState      │
+                          │  (JSON-RPC)          │
                           └──────────┬───────────┘
                                      │
                           ┌──────────▼───────────┐
-                          │  suix_getLatest       │
-                          │  SuiSystemState       │
-                          │  (JSON-RPC)           │
-                          └──────────┬───────────┘
-                                     │
-                          ┌──────────▼───────────┐
-                          │  Epoch changed?       │
-                          └───┬──────────────┬────┘
-                            No│              │Yes
-                              │   ┌──────────▼───────────┐
-                              │   │  Filter trusted       │
-                              │   │  validators votes     │
-                              │   └──────────┬───────────┘
+                          │  Epoch changed?      │
+                          └───┬─────────────┬────┘
+                            No│             │Yes
+                              │   ┌─────────▼───────────┐
+                              │   │  Filter trusted     │
+                              │   │  validators votes   │
+                              │   └──────────┬──────────┘
                               │              │
                               │   ┌──────────▼───────────┐
-                              │   │  Quorum met?          │
-                              │   └───┬──────────────┬────┘
-                              │     No│              │Yes
-                              │       │   ┌──────────▼───────────┐
-                              │       │   │  Compute median/avg  │
-                              │       │   │  gas price           │
-                              │       │   └──────────┬───────────┘
+                              │   │  Quorum met?         │
+                              │   └───┬─────────────┬────┘
+                              │     No│             │Yes
+                              │       │   ┌─────────▼───────────┐
+                              │       │   │  Compute median/avg │
+                              │       │   │  gas price          │
+                              │       │   └──────────┬──────────┘
                               │       │              │
                               │       │   ┌──────────▼───────────┐
                               │       │   │  sui validator       │
@@ -44,7 +44,7 @@ Daemon that automatically votes on SUI gas price for your validator by following
                               │       │   └──────────────────────┘
                               │       │
                           ┌───▼───────▼──────────┐
-                          │  Sleep poll_interval  │
+                          │  Sleep poll_interval │
                           └──────────────────────┘
 ```
 
