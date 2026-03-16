@@ -44,6 +44,18 @@ def save_config(path, config):
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+def _normalize_address(addr):
+    """Convert address to 0x-prefixed hex string.
+
+    YAML parses unquoted 0x... values as integers, so we need to handle both.
+    """
+    if addr is None:
+        return None
+    if isinstance(addr, int):
+        return hex(addr)
+    return str(addr)
+
+
 class TelegramBot:
     """Interactive Telegram bot running alongside the auto-voter daemon."""
 
@@ -234,7 +246,7 @@ class TelegramBot:
         """Build menu text with optional validator analytics."""
         lines = ["<b>SUI Gas Voter</b>"]
 
-        val_addr = self.config.get("validator_address")
+        val_addr = _normalize_address(self.config.get("validator_address"))
         if val_addr:
             try:
                 state = get_system_state(self.config["rpc_url"])

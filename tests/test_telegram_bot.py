@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from sui_client import RPCError, CLIError
-from telegram_bot import TelegramBot, save_config, _read_voted_epoch, _write_voted_epoch
+from telegram_bot import TelegramBot, save_config, _read_voted_epoch, _write_voted_epoch, _normalize_address
 
 
 def _make_config(**overrides):
@@ -120,6 +120,16 @@ class TestMenu(BotTestBase):
         self.assertIn("Alice", text)
         self.assertIn("505", text)
         self.assertIn("Ref: 500", text)
+
+    @patch("telegram_bot.get_system_state")
+    def test_menu_works_with_int_address(self, mock_state):
+        """YAML parses unquoted 0x... as int — bot must handle it."""
+        mock_state.return_value = SAMPLE_STATE
+        # Simulate YAML parsing: int instead of string
+        self.config["validator_address"] = 0xAAA
+        self.bot._send_menu("123")
+        text = self.sent[0]["text"]
+        self.assertIn("Alice", text)
 
     def test_menu_without_validator_address(self):
         text = self.bot._menu_text()
