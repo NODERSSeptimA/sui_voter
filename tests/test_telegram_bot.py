@@ -111,6 +111,21 @@ class TestMenu(BotTestBase):
         self.bot._edit_menu("123", MSG_ID)
         self.assertNotIn("123", self.bot._user_state)
 
+    @patch("telegram_bot.get_system_state")
+    def test_menu_shows_validator_analytics(self, mock_state):
+        mock_state.return_value = SAMPLE_STATE
+        self.config["validator_address"] = "0xaaa"
+        self.bot._send_menu("123")
+        text = self.sent[0]["text"]
+        self.assertIn("Alice", text)
+        self.assertIn("505", text)
+        self.assertIn("Ref: 500", text)
+
+    def test_menu_without_validator_address(self):
+        text = self.bot._menu_text()
+        self.assertIn("SUI Gas Voter", text)
+        self.assertNotIn("Epoch", text)
+
 
 class TestStatusCommand(BotTestBase):
     @patch("telegram_bot.get_system_state")
@@ -273,12 +288,39 @@ class TestChangeQuorum(BotTestBase):
 
 class TestManualVote(BotTestBase):
     @patch("telegram_bot.get_system_state")
-    def test_vote_start_edits_and_stores_msg_id(self, mock_state):
+    def test_vote_start_shows_preset_buttons(self, mock_state):
         mock_state.return_value = SAMPLE_STATE
         self.bot._cmd_vote_start("123", MSG_ID)
         self.assertEqual(len(self.edits), 1)
-        self.assertIn("Manual Vote", self.last_edit["text"])
-        self.assertEqual(self.bot._user_state["123"]["msg_id"], MSG_ID)
+        text = self.last_edit["text"]
+        self.assertIn("Manual Vote", text)
+        self.assertIn("median", text.lower())
+        # Should have preset price buttons
+        markup = self.last_edit["markup"]
+        all_data = []
+        for row in markup["inline_keyboard"]:
+            for btn in row:
+                all_data.append(btn.get("callback_data", ""))
+        self.assertTrue(any(d.startswith("vote_amount:") for d in all_data))
+        self.assertIn("vote_custom", all_data)
+
+    @patch("telegram_bot.get_system_state")
+    def test_vote_start_rpc_fail_fallback_to_text(self, mock_state):
+        mock_state.side_effect = RPCError("fail")
+        self.bot._cmd_vote_start("123", MSG_ID)
+        self.assertEqual(self.bot._user_state["123"]["state"], "waiting_vote")
+        text = self.last_edit["text"]
+        self.assertIn("Enter gas price", text)
+
+    def test_vote_custom_sets_waiting_state(self):
+        self.bot._cmd_vote_custom("123", MSG_ID)
+        self.assertEqual(self.bot._user_state["123"]["state"], "waiting_vote")
+        self.assertIn("Enter gas price", self.last_edit["text"])
+
+    def test_vote_confirm_shows_confirmation(self):
+        self.bot._cmd_vote_confirm("123", MSG_ID, 505)
+        self.assertIn("505 MIST", self.last_edit["text"])
+        self.assertIn("Confirm", str(self.last_edit["markup"]))
 
     def test_vote_amount_valid_edits(self):
         self.bot._user_state["123"] = {"state": "waiting_vote", "msg_id": MSG_ID}

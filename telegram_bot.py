@@ -79,6 +79,10 @@ class TelegramBot:
             {"command": "vote", "description": "Manual vote"},
             {"command": "trusted", "description": "Manage trusted validators"},
         ])
+        self._api(
+            "setMyDescription",
+            description="SUI Gas Price Auto-Voter\nAutomated gas price voting for SUI validators.\nUse /start to open the control panel.",
+        )
 
     def stop(self):
         self._stop.set()
@@ -161,11 +165,11 @@ class TelegramBot:
             if text.startswith("/start") or text.startswith("/menu"):
                 self._send_menu(chat_id)
             elif text.startswith("/status"):
-                self._cmd_status_new(chat_id)
+                self._cmd_status(chat_id, None)
             elif text.startswith("/vote"):
-                self._cmd_vote_start_new(chat_id)
+                self._cmd_vote_start(chat_id, None)
             elif text.startswith("/trusted"):
-                self._cmd_trusted_menu_new(chat_id)
+                self._cmd_trusted_menu(chat_id, None)
             else:
                 self._on_text(chat_id, text)
 
@@ -179,12 +183,15 @@ class TelegramBot:
             "use_recommended": self._cmd_apply_recommended,
             "enter_addresses": self._cmd_enter_addresses,
             "change_quorum": self._cmd_change_quorum,
+            "vote_custom": self._cmd_vote_custom,
             "cancel": self._edit_menu,
         }
         if data in simple:
             simple[data](chat_id, msg_id)
         elif data.startswith("confirm_vote:"):
             self._cmd_vote_execute(chat_id, msg_id, int(data.split(":")[1]))
+        elif data.startswith("vote_amount:"):
+            self._cmd_vote_confirm(chat_id, msg_id, int(data.split(":")[1]))
         elif data.startswith("quorum:"):
             self._cmd_apply_quorum(chat_id, msg_id, int(data.split(":")[1]))
 
@@ -220,26 +227,40 @@ class TelegramBot:
     def _cancel(self):
         return {"inline_keyboard": [[{"text": "❌ Cancel", "callback_data": "cancel"}]]}
 
+    def _menu_text(self):
+        """Build menu text with optional validator analytics."""
+        lines = ["<b>SUI Gas Voter</b>"]
+
+        val_addr = self.config.get("validator_address")
+        if val_addr:
+            try:
+                state = get_system_state(self.config["rpc_url"])
+                epoch = state["epoch"]
+                ref_price = state.get("referenceGasPrice", "?")
+                for v in state["activeValidators"]:
+                    if v["suiAddress"] == val_addr:
+                        name = html.escape(v.get("name", "Validator"))
+                        price = v["nextEpochGasPrice"]
+                        vp = v.get("votingPower", "?")
+                        lines.append("")
+                        lines.append(f"<b>{name}</b>")
+                        lines.append(f"Epoch: {epoch} | VP: {vp}")
+                        lines.append(f"Your vote: {price} MIST | Ref: {ref_price} MIST")
+                        break
+            except RPCError:
+                pass
+
+        return "\n".join(lines)
+
     def _send_menu(self, chat_id):
-        """Send a NEW menu message (for /start command)."""
+        """Send a NEW menu message (for /start command and startup)."""
         self._user_state.pop(chat_id, None)
-        self._send(chat_id, "<b>SUI Gas Voter</b>", markup=self._menu_markup())
+        self._send(chat_id, self._menu_text(), markup=self._menu_markup())
 
     def _edit_menu(self, chat_id, msg_id):
         """Edit existing message to show menu (for callbacks)."""
         self._user_state.pop(chat_id, None)
-        self._edit(chat_id, msg_id, "<b>SUI Gas Voter</b>", markup=self._menu_markup())
-
-    # ── Slash command wrappers (send new message, no msg_id) ──
-
-    def _cmd_status_new(self, chat_id):
-        self._cmd_status(chat_id, None)
-
-    def _cmd_vote_start_new(self, chat_id):
-        self._cmd_vote_start(chat_id, None)
-
-    def _cmd_trusted_menu_new(self, chat_id):
-        self._cmd_trusted_menu(chat_id, None)
+        self._edit(chat_id, msg_id, self._menu_text(), markup=self._menu_markup())
 
     # ── Status ─────────────────────────────────────────────────
 
@@ -465,24 +486,76 @@ class TelegramBot:
     # ── Manual vote ────────────────────────────────────────────
 
     def _cmd_vote_start(self, chat_id, msg_id):
-        hint = ""
+        """Show vote screen with preset price buttons."""
         try:
             state = get_system_state(self.config["rpc_url"])
             prices = [int(v["nextEpochGasPrice"]) for v in state["activeValidators"]]
-            hint = (
-                f"Network median: {compute_gas_price(prices, 'median')}\n"
-                f"Ref: {state.get('referenceGasPrice', '?')}\n\n"
+            median = compute_gas_price(prices, "median")
+            avg = compute_gas_price(prices, "average")
+            ref = int(state.get("referenceGasPrice", "0"))
+
+            lines = [
+                "<b>✋ Manual Vote</b>",
+                "",
+                f"Network median: {median} MIST",
+                f"Reference: {ref} MIST",
+                f"Average: {avg} MIST",
+                "",
+                "Select price or enter custom:",
+            ]
+
+            # Build preset buttons, dedup
+            presets = []
+            seen = set()
+            for label, value in [
+                (f"Median: {median}", median),
+                (f"Ref: {ref}", ref),
+                (f"Avg: {avg}", avg),
+            ]:
+                if value not in seen:
+                    seen.add(value)
+                    presets.append({"text": label, "callback_data": f"vote_amount:{value}"})
+
+            rows = [presets[:2]]
+            if len(presets) > 2:
+                rows.append(presets[2:])
+            rows.append([{"text": "✏️ Custom amount", "callback_data": "vote_custom"}])
+            rows.append([{"text": "↩️ Menu", "callback_data": "menu"}])
+
+            self._respond(
+                chat_id, msg_id,
+                "\n".join(lines),
+                markup={"inline_keyboard": rows},
             )
         except RPCError:
-            pass
+            # Fallback: ask for text input
+            self._user_state[chat_id] = {"state": "waiting_vote", "msg_id": msg_id}
+            self._respond(
+                chat_id, msg_id,
+                "<b>✋ Manual Vote</b>\n\nEnter gas price (MIST):",
+                markup=self._cancel(),
+            )
+
+    def _cmd_vote_custom(self, chat_id, msg_id):
+        """Switch to text input for custom vote amount."""
         self._user_state[chat_id] = {"state": "waiting_vote", "msg_id": msg_id}
-        self._respond(
+        self._edit(
             chat_id, msg_id,
-            f"<b>✋ Manual Vote</b>\n\n{hint}Enter gas price (MIST):",
+            "<b>✋ Manual Vote</b>\n\nEnter gas price (MIST):",
             markup=self._cancel(),
         )
 
+    def _cmd_vote_confirm(self, chat_id, msg_id, amount):
+        """Show confirmation for preset vote amount."""
+        self._edit(chat_id, msg_id, f"Vote <b>{amount} MIST</b>?", markup={"inline_keyboard": [
+            [
+                {"text": "✅ Confirm", "callback_data": f"confirm_vote:{amount}"},
+                {"text": "❌ Cancel", "callback_data": "cancel"},
+            ],
+        ]})
+
     def _on_vote_amount(self, chat_id, msg_id, text):
+        """Handle typed vote amount."""
         self._user_state.pop(chat_id, None)
         try:
             amount = int(text)
