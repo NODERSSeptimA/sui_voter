@@ -61,6 +61,8 @@ class TelegramBot:
 
     def run(self):
         logger.info("Telegram bot started (chat_id=%s)", self._chat_id)
+        self._register_commands()
+        self._send_menu(self._chat_id)
         while not self._stop.is_set():
             try:
                 for update in self._poll():
@@ -69,6 +71,14 @@ class TelegramBot:
                 logger.exception("Bot error")
                 self._stop.wait(5)
         logger.info("Telegram bot stopped")
+
+    def _register_commands(self):
+        self._api("setMyCommands", commands=[
+            {"command": "start", "description": "Main menu"},
+            {"command": "status", "description": "Epoch status & gas prices"},
+            {"command": "vote", "description": "Manual vote"},
+            {"command": "trusted", "description": "Manage trusted validators"},
+        ])
 
     def stop(self):
         self._stop.set()
@@ -150,6 +160,12 @@ class TelegramBot:
             text = msg.get("text", "")
             if text.startswith("/start") or text.startswith("/menu"):
                 self._send_menu(chat_id)
+            elif text.startswith("/status"):
+                self._cmd_status_new(chat_id)
+            elif text.startswith("/vote"):
+                self._cmd_vote_start_new(chat_id)
+            elif text.startswith("/trusted"):
+                self._cmd_trusted_menu_new(chat_id)
             else:
                 self._on_text(chat_id, text)
 
@@ -214,13 +230,24 @@ class TelegramBot:
         self._user_state.pop(chat_id, None)
         self._edit(chat_id, msg_id, "<b>SUI Gas Voter</b>", markup=self._menu_markup())
 
+    # ── Slash command wrappers (send new message, no msg_id) ──
+
+    def _cmd_status_new(self, chat_id):
+        self._cmd_status(chat_id, None)
+
+    def _cmd_vote_start_new(self, chat_id):
+        self._cmd_vote_start(chat_id, None)
+
+    def _cmd_trusted_menu_new(self, chat_id):
+        self._cmd_trusted_menu(chat_id, None)
+
     # ── Status ─────────────────────────────────────────────────
 
     def _cmd_status(self, chat_id, msg_id):
         try:
             state = get_system_state(self.config["rpc_url"])
         except RPCError as e:
-            self._edit(chat_id, msg_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
+            self._respond(chat_id, msg_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
             return
 
         validators = state["activeValidators"]
@@ -273,7 +300,7 @@ class TelegramBot:
         else:
             lines.append("\n⚠️ Quorum not met")
 
-        self._edit(chat_id, msg_id, "\n".join(lines), markup=self._back())
+        self._respond(chat_id, msg_id, "\n".join(lines), markup=self._back())
 
     # ── Trusted validators ─────────────────────────────────────
 
@@ -299,7 +326,7 @@ class TelegramBot:
             for addr in trusted:
                 lines.append(f"  <code>{html.escape(addr[:24])}...</code>")
 
-        self._edit(chat_id, msg_id, "\n".join(lines), markup={"inline_keyboard": [
+        self._respond(chat_id, msg_id, "\n".join(lines), markup={"inline_keyboard": [
             [{"text": "📋 Recommended", "callback_data": "recommend"}],
             [{"text": "✏️ Enter addresses", "callback_data": "enter_addresses"}],
             [{"text": "🔢 Change quorum", "callback_data": "change_quorum"}],
@@ -449,7 +476,7 @@ class TelegramBot:
         except RPCError:
             pass
         self._user_state[chat_id] = {"state": "waiting_vote", "msg_id": msg_id}
-        self._edit(
+        self._respond(
             chat_id, msg_id,
             f"<b>✋ Manual Vote</b>\n\n{hint}Enter gas price (MIST):",
             markup=self._cancel(),
