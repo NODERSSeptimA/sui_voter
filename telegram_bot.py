@@ -1,4 +1,8 @@
-"""Telegram bot for interactive SUI gas price management."""
+"""Telegram bot for interactive SUI gas price management.
+
+Uses editMessageText for callback interactions so the entire UI
+lives in a single message — no chat spam.
+"""
 
 import html
 import logging
@@ -91,6 +95,24 @@ class TelegramBot:
             params["reply_markup"] = markup
         return self._api("sendMessage", **params)
 
+    def _edit(self, chat_id, message_id, text, markup=None):
+        params = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if markup:
+            params["reply_markup"] = markup
+        return self._api("editMessageText", **params)
+
+    def _respond(self, chat_id, msg_id, text, markup=None):
+        """Edit existing message if msg_id available, send new otherwise."""
+        if msg_id:
+            return self._edit(chat_id, msg_id, text, markup)
+        return self._send(chat_id, text, markup)
+
     def _answer_cb(self, cb_id):
         self._api("answerCallbackQuery", callback_query_id=cb_id)
 
@@ -117,8 +139,9 @@ class TelegramBot:
             chat_id = str(cb["message"]["chat"]["id"])
             if not self._authorized(chat_id):
                 return
+            msg_id = cb["message"]["message_id"]
             self._answer_cb(cb["id"])
-            self._on_callback(chat_id, cb["data"])
+            self._on_callback(chat_id, msg_id, cb["data"])
         elif "message" in update:
             msg = update["message"]
             chat_id = str(msg["chat"]["id"])
@@ -130,33 +153,36 @@ class TelegramBot:
             else:
                 self._on_text(chat_id, text)
 
-    def _on_callback(self, chat_id, data):
+    def _on_callback(self, chat_id, msg_id, data):
         simple = {
             "status": self._cmd_status,
             "trusted": self._cmd_trusted_menu,
             "vote": self._cmd_vote_start,
-            "menu": self._send_menu,
+            "menu": self._edit_menu,
             "recommend": self._cmd_show_recommended,
             "use_recommended": self._cmd_apply_recommended,
             "enter_addresses": self._cmd_enter_addresses,
             "change_quorum": self._cmd_change_quorum,
-            "cancel": self._send_menu,
+            "cancel": self._edit_menu,
         }
         if data in simple:
-            simple[data](chat_id)
+            simple[data](chat_id, msg_id)
         elif data.startswith("confirm_vote:"):
-            self._cmd_vote_execute(chat_id, int(data.split(":")[1]))
+            self._cmd_vote_execute(chat_id, msg_id, int(data.split(":")[1]))
+        elif data.startswith("quorum:"):
+            self._cmd_apply_quorum(chat_id, msg_id, int(data.split(":")[1]))
 
     def _on_text(self, chat_id, text):
-        state = self._user_state.get(chat_id, {}).get("state")
+        state_info = self._user_state.get(chat_id, {})
+        state = state_info.get("state")
+        msg_id = state_info.get("msg_id")
         handlers = {
             "waiting_vote": self._on_vote_amount,
-            "waiting_quorum": self._on_quorum_value,
             "waiting_addresses": self._on_addresses_input,
         }
         handler = handlers.get(state)
         if handler:
-            handler(chat_id, text.strip())
+            handler(chat_id, msg_id, text.strip())
         else:
             self._send_menu(chat_id)
 
@@ -172,20 +198,29 @@ class TelegramBot:
     def _back(self):
         return {"inline_keyboard": [[{"text": "↩️ Menu", "callback_data": "menu"}]]}
 
+    def _back_trusted(self):
+        return {"inline_keyboard": [[{"text": "↩️ Back", "callback_data": "trusted"}]]}
+
     def _cancel(self):
         return {"inline_keyboard": [[{"text": "❌ Cancel", "callback_data": "cancel"}]]}
 
     def _send_menu(self, chat_id):
+        """Send a NEW menu message (for /start command)."""
         self._user_state.pop(chat_id, None)
         self._send(chat_id, "<b>SUI Gas Voter</b>", markup=self._menu_markup())
 
+    def _edit_menu(self, chat_id, msg_id):
+        """Edit existing message to show menu (for callbacks)."""
+        self._user_state.pop(chat_id, None)
+        self._edit(chat_id, msg_id, "<b>SUI Gas Voter</b>", markup=self._menu_markup())
+
     # ── Status ─────────────────────────────────────────────────
 
-    def _cmd_status(self, chat_id):
+    def _cmd_status(self, chat_id, msg_id):
         try:
             state = get_system_state(self.config["rpc_url"])
         except RPCError as e:
-            self._send(chat_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
+            self._edit(chat_id, msg_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
             return
 
         validators = state["activeValidators"]
@@ -238,11 +273,11 @@ class TelegramBot:
         else:
             lines.append("\n⚠️ Quorum not met")
 
-        self._send(chat_id, "\n".join(lines), markup=self._back())
+        self._edit(chat_id, msg_id, "\n".join(lines), markup=self._back())
 
     # ── Trusted validators ─────────────────────────────────────
 
-    def _cmd_trusted_menu(self, chat_id):
+    def _cmd_trusted_menu(self, chat_id, msg_id):
         trusted = self.config["trusted_validators"]
         lines = [
             "<b>🔄 Trusted Validators</b>",
@@ -264,18 +299,18 @@ class TelegramBot:
             for addr in trusted:
                 lines.append(f"  <code>{html.escape(addr[:24])}...</code>")
 
-        self._send(chat_id, "\n".join(lines), markup={"inline_keyboard": [
+        self._edit(chat_id, msg_id, "\n".join(lines), markup={"inline_keyboard": [
             [{"text": "📋 Recommended", "callback_data": "recommend"}],
             [{"text": "✏️ Enter addresses", "callback_data": "enter_addresses"}],
             [{"text": "🔢 Change quorum", "callback_data": "change_quorum"}],
             [{"text": "↩️ Menu", "callback_data": "menu"}],
         ]})
 
-    def _cmd_show_recommended(self, chat_id):
+    def _cmd_show_recommended(self, chat_id, msg_id):
         try:
             state = get_system_state(self.config["rpc_url"])
         except RPCError as e:
-            self._send(chat_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
+            self._edit(chat_id, msg_id, f"❌ RPC error: {html.escape(str(e))}", markup=self._back())
             return
 
         validators = state["activeValidators"]
@@ -321,33 +356,33 @@ class TelegramBot:
             }])
         buttons.append([{"text": "↩️ Back", "callback_data": "trusted"}])
 
-        self._send(chat_id, "\n".join(lines), markup={"inline_keyboard": buttons})
+        self._edit(chat_id, msg_id, "\n".join(lines), markup={"inline_keyboard": buttons})
 
-    def _cmd_apply_recommended(self, chat_id):
+    def _cmd_apply_recommended(self, chat_id, msg_id):
         addrs = self._user_state.get(chat_id, {}).get("addresses", [])
         self._user_state.pop(chat_id, None)
         if not addrs:
-            self._send(chat_id, "❌ No recommendations available", markup=self._back())
+            self._edit(chat_id, msg_id, "❌ No recommendations available", markup=self._back())
             return
         self.config["trusted_validators"] = addrs
         if self.config["min_quorum"] > len(addrs):
             self.config["min_quorum"] = len(addrs)
         self._persist_config()
-        self._send(
-            chat_id,
+        self._edit(
+            chat_id, msg_id,
             f"✅ Set {len(addrs)} trusted validators\nQuorum: {self.config['min_quorum']}",
-            markup=self._back(),
+            markup=self._back_trusted(),
         )
 
-    def _cmd_enter_addresses(self, chat_id):
-        self._user_state[chat_id] = {"state": "waiting_addresses"}
-        self._send(
-            chat_id,
-            "Enter validator addresses (0x...), one per line or comma-separated:",
+    def _cmd_enter_addresses(self, chat_id, msg_id):
+        self._user_state[chat_id] = {"state": "waiting_addresses", "msg_id": msg_id}
+        self._edit(
+            chat_id, msg_id,
+            "✏️ Send validator addresses (0x...), one per line or comma-separated:",
             markup=self._cancel(),
         )
 
-    def _on_addresses_input(self, chat_id, text):
+    def _on_addresses_input(self, chat_id, msg_id, text):
         self._user_state.pop(chat_id, None)
         addrs = [
             a.strip()
@@ -355,45 +390,54 @@ class TelegramBot:
             if a.strip().startswith("0x")
         ]
         if not addrs:
-            self._send(chat_id, "❌ No valid 0x addresses found", markup=self._back())
+            self._respond(chat_id, msg_id, "❌ No valid 0x addresses found", markup=self._back())
             return
         self.config["trusted_validators"] = addrs
         if self.config["min_quorum"] > len(addrs):
             self.config["min_quorum"] = len(addrs)
         self._persist_config()
-        self._send(
-            chat_id,
+        self._respond(
+            chat_id, msg_id,
             f"✅ Set {len(addrs)} trusted validators\nQuorum: {self.config['min_quorum']}",
-            markup=self._back(),
+            markup=self._back_trusted(),
         )
 
-    def _cmd_change_quorum(self, chat_id):
+    def _cmd_change_quorum(self, chat_id, msg_id):
         n = len(self.config["trusted_validators"])
-        self._user_state[chat_id] = {"state": "waiting_quorum"}
-        self._send(
-            chat_id,
-            f"Current: {self.config['min_quorum']}/{n}\nEnter new quorum (1–{n}):",
-            markup=self._cancel(),
+        current = self.config["min_quorum"]
+        rows = []
+        row = []
+        for i in range(1, n + 1):
+            label = f"· {i}" if i == current else str(i)
+            row.append({"text": label, "callback_data": f"quorum:{i}"})
+            if len(row) == 5:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([{"text": "↩️ Back", "callback_data": "trusted"}])
+        self._edit(
+            chat_id, msg_id,
+            f"<b>🔢 Change Quorum</b>\n\nCurrent: {current}/{n}\nSelect new value:",
+            markup={"inline_keyboard": rows},
         )
 
-    def _on_quorum_value(self, chat_id, text):
-        self._user_state.pop(chat_id, None)
-        try:
-            q = int(text)
-        except ValueError:
-            self._send(chat_id, "❌ Enter a number", markup=self._back())
-            return
+    def _cmd_apply_quorum(self, chat_id, msg_id, value):
         n = len(self.config["trusted_validators"])
-        if q < 1 or q > n:
-            self._send(chat_id, f"❌ Must be 1–{n}", markup=self._back())
+        if value < 1 or value > n:
+            self._edit(chat_id, msg_id, f"❌ Must be 1–{n}", markup=self._back_trusted())
             return
-        self.config["min_quorum"] = q
+        self.config["min_quorum"] = value
         self._persist_config()
-        self._send(chat_id, f"✅ Quorum: {q}", markup=self._back())
+        self._edit(
+            chat_id, msg_id,
+            f"✅ Quorum set to {value}",
+            markup=self._back_trusted(),
+        )
 
     # ── Manual vote ────────────────────────────────────────────
 
-    def _cmd_vote_start(self, chat_id):
+    def _cmd_vote_start(self, chat_id, msg_id):
         hint = ""
         try:
             state = get_system_state(self.config["rpc_url"])
@@ -404,36 +448,36 @@ class TelegramBot:
             )
         except RPCError:
             pass
-        self._user_state[chat_id] = {"state": "waiting_vote"}
-        self._send(
-            chat_id,
+        self._user_state[chat_id] = {"state": "waiting_vote", "msg_id": msg_id}
+        self._edit(
+            chat_id, msg_id,
             f"<b>✋ Manual Vote</b>\n\n{hint}Enter gas price (MIST):",
             markup=self._cancel(),
         )
 
-    def _on_vote_amount(self, chat_id, text):
+    def _on_vote_amount(self, chat_id, msg_id, text):
         self._user_state.pop(chat_id, None)
         try:
             amount = int(text)
         except ValueError:
-            self._send(chat_id, "❌ Enter a number", markup=self._back())
+            self._respond(chat_id, msg_id, "❌ Enter a number", markup=self._back())
             return
         if amount <= 0:
-            self._send(chat_id, "❌ Must be positive", markup=self._back())
+            self._respond(chat_id, msg_id, "❌ Must be positive", markup=self._back())
             return
-        self._send(chat_id, f"Vote <b>{amount} MIST</b>?", markup={"inline_keyboard": [
+        self._respond(chat_id, msg_id, f"Vote <b>{amount} MIST</b>?", markup={"inline_keyboard": [
             [
                 {"text": "✅ Confirm", "callback_data": f"confirm_vote:{amount}"},
                 {"text": "❌ Cancel", "callback_data": "cancel"},
             ],
         ]})
 
-    def _cmd_vote_execute(self, chat_id, amount):
-        self._send(chat_id, f"⏳ Voting {amount} MIST...")
+    def _cmd_vote_execute(self, chat_id, msg_id, amount):
+        self._edit(chat_id, msg_id, f"⏳ Voting {amount} MIST...")
         try:
             tx_info = submit_vote(self.config["sui_bin"], amount)
         except CLIError as e:
-            self._send(chat_id, f"❌ Failed: {html.escape(str(e))}", markup=self._back())
+            self._edit(chat_id, msg_id, f"❌ Failed: {html.escape(str(e))}", markup=self._back())
             return
 
         digest = tx_info.get("digest") or "unknown"
@@ -446,8 +490,8 @@ class TelegramBot:
         except Exception:
             pass
 
-        self._send(
-            chat_id,
+        self._edit(
+            chat_id, msg_id,
             f"✅ <b>Voted {amount} MIST</b>\n"
             f"Digest: <code>{html.escape(digest)}</code>\n"
             f"Status: {html.escape(status)}\n"
