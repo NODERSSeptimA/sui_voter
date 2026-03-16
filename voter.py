@@ -15,6 +15,7 @@ from sui_client import (
     CLIError,
 )
 from notifier import send_telegram
+from telegram_bot import TelegramBot
 
 logger = logging.getLogger("sui_voter")
 
@@ -132,6 +133,10 @@ def main():
     quorum_notified_epoch = None
     cli_error_notified_epoch = None
 
+    bot = TelegramBot(config, args.config, state_file)
+    bot_thread = threading.Thread(target=bot.run, daemon=True, name="telegram-bot")
+    bot_thread.start()
+
     logger.info("SUI Gas Price Auto-Voter started")
     logger.info("Trusted validators: %d, quorum: %d, strategy: %s",
                 len(config["trusted_validators"]),
@@ -139,6 +144,11 @@ def main():
                 config["strategy"])
 
     while not _stop_event.is_set():
+        # Re-read state file in case bot submitted a manual vote
+        file_epoch = read_voted_epoch(state_file)
+        if file_epoch is not None and (voted_epoch is None or file_epoch > voted_epoch):
+            voted_epoch = file_epoch
+
         try:
             result = do_vote_cycle(config, current_epoch, voted_epoch)
             rpc_fail_count = 0
@@ -171,6 +181,7 @@ def main():
 
         _stop_event.wait(config["poll_interval"])
 
+    bot.stop()
     logger.info("Shutdown complete")
 
 
