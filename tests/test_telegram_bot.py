@@ -286,6 +286,46 @@ class TestChangeQuorum(BotTestBase):
         self.assertIn("Must be", self.last_edit["text"])
 
 
+class TestChangeStrategy(BotTestBase):
+    def test_shows_options(self):
+        self.bot._cmd_change_strategy("123", MSG_ID)
+        text = self.last_edit["text"]
+        self.assertIn("Strategy", text)
+        self.assertIn("median", text)
+        markup = self.last_edit["markup"]
+        all_data = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+        self.assertIn("strategy:median", all_data)
+        self.assertIn("strategy:average", all_data)
+
+    def test_current_marked(self):
+        self.config["strategy"] = "average"
+        self.bot._cmd_change_strategy("123", MSG_ID)
+        markup = self.last_edit["markup"]
+        for row in markup["inline_keyboard"]:
+            for btn in row:
+                if btn.get("callback_data") == "strategy:average":
+                    self.assertTrue(btn["text"].startswith("· "))
+                elif btn.get("callback_data") == "strategy:median":
+                    self.assertFalse(btn["text"].startswith("· "))
+
+    def test_apply_strategy(self):
+        self.bot._persist_config = MagicMock()
+        self.bot._cmd_apply_strategy("123", MSG_ID, "average")
+        self.assertEqual(self.config["strategy"], "average")
+        self.bot._persist_config.assert_called_once()
+        self.assertIn("average", self.last_edit["text"])
+
+    def test_apply_invalid_strategy(self):
+        self.bot._cmd_apply_strategy("123", MSG_ID, "mode")
+        self.assertIn("Invalid", self.last_edit["text"])
+        self.assertEqual(self.config["strategy"], "median")  # unchanged
+
+    def test_strategy_callback_routing(self):
+        self.bot._persist_config = MagicMock()
+        self.bot._on_callback("123", MSG_ID, "strategy:average")
+        self.assertEqual(self.config["strategy"], "average")
+
+
 class TestManualVote(BotTestBase):
     @patch("telegram_bot.get_system_state")
     def test_vote_start_shows_preset_buttons(self, mock_state):

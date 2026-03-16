@@ -183,6 +183,7 @@ class TelegramBot:
             "use_recommended": self._cmd_apply_recommended,
             "enter_addresses": self._cmd_enter_addresses,
             "change_quorum": self._cmd_change_quorum,
+            "change_strategy": self._cmd_change_strategy,
             "vote_custom": self._cmd_vote_custom,
             "cancel": self._edit_menu,
         }
@@ -192,6 +193,8 @@ class TelegramBot:
             self._cmd_vote_execute(chat_id, msg_id, int(data.split(":")[1]))
         elif data.startswith("vote_amount:"):
             self._cmd_vote_confirm(chat_id, msg_id, int(data.split(":")[1]))
+        elif data.startswith("strategy:"):
+            self._cmd_apply_strategy(chat_id, msg_id, data.split(":")[1])
         elif data.startswith("quorum:"):
             self._cmd_apply_quorum(chat_id, msg_id, int(data.split(":")[1]))
 
@@ -327,9 +330,10 @@ class TelegramBot:
 
     def _cmd_trusted_menu(self, chat_id, msg_id):
         trusted = self.config["trusted_validators"]
+        strategy = self.config["strategy"]
         lines = [
             "<b>🔄 Trusted Validators</b>",
-            f"Quorum: {self.config['min_quorum']}/{len(trusted)}",
+            f"Quorum: {self.config['min_quorum']}/{len(trusted)} | Strategy: {strategy}",
             "",
         ]
         try:
@@ -350,7 +354,10 @@ class TelegramBot:
         self._respond(chat_id, msg_id, "\n".join(lines), markup={"inline_keyboard": [
             [{"text": "📋 Recommended", "callback_data": "recommend"}],
             [{"text": "✏️ Enter addresses", "callback_data": "enter_addresses"}],
-            [{"text": "🔢 Change quorum", "callback_data": "change_quorum"}],
+            [
+                {"text": "🔢 Quorum", "callback_data": "change_quorum"},
+                {"text": "📐 Strategy", "callback_data": "change_strategy"},
+            ],
             [{"text": "↩️ Menu", "callback_data": "menu"}],
         ]})
 
@@ -480,6 +487,36 @@ class TelegramBot:
         self._edit(
             chat_id, msg_id,
             f"✅ Quorum set to {value}",
+            markup=self._back_trusted(),
+        )
+
+    def _cmd_change_strategy(self, chat_id, msg_id):
+        current = self.config["strategy"]
+        options = [
+            ("median", "Median — lower-middle value (conservative)"),
+            ("average", "Average — arithmetic mean (follows the crowd)"),
+        ]
+        rows = []
+        for key, desc in options:
+            mark = "· " if key == current else ""
+            rows.append([{"text": f"{mark}{desc}", "callback_data": f"strategy:{key}"}])
+        rows.append([{"text": "↩️ Back", "callback_data": "trusted"}])
+        self._edit(
+            chat_id, msg_id,
+            f"<b>📐 Strategy</b>\n\nCurrent: <b>{current}</b>\n\n"
+            "Determines how auto-vote price is calculated from trusted validators:",
+            markup={"inline_keyboard": rows},
+        )
+
+    def _cmd_apply_strategy(self, chat_id, msg_id, value):
+        if value not in ("median", "average"):
+            self._edit(chat_id, msg_id, "❌ Invalid strategy", markup=self._back_trusted())
+            return
+        self.config["strategy"] = value
+        self._persist_config()
+        self._edit(
+            chat_id, msg_id,
+            f"✅ Strategy: {value}",
             markup=self._back_trusted(),
         )
 
